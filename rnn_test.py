@@ -22,8 +22,10 @@ def sample(preds, temperature=1.0):
 def performTest(weightsFilename):
     #Constants
     filename = "corpus.txt"
-    seqLength = 40
-    temperature = 0.5
+    maxSeqLength = 100
+    seedLength = 40
+    temperature = 0.1
+    maskValue = -10
 
     #Allow memory to grow on GPU
     gpu_devices = tf.config.experimental.list_physical_devices("GPU")
@@ -37,31 +39,42 @@ def performTest(weightsFilename):
     intToChar = dict((i, c) for c, i in charToInt.items())
 
     #Get a random piece of test data
-    pattern = getTestData(rawText, seqLength, charToInt, nChars, nVocab)
-
+    pattern = getTestData(rawText, seedLength, maxSeqLength, maskValue, charToInt, nChars, nVocab)
+    #print(pattern.shape)
     #Get the RNN model
-    model = loadModel(seqLength, nVocab)
+    model = loadModel(maxSeqLength, nVocab, maskValue)
 
     #Load the network weights
     filename = weightsFilename
     #"weights-improvement-35-1.1789-bigger.hdf5"#"weights-improvement-50-1.0037-bigger.hdf5"
     model.load_weights(filename)
 
-    result = ''.join([intToChar[np.argmax(value)] for value in pattern])
+    result = ''.join([intToChar[np.argmax(pattern[0, i])] for i in range(seedLength)])
 
-    #Generate characters using the seed until a full stop is predicted
+    #Generate characters using the seed until the end is reached or the max size is exceeded
     currentChar = None
-    while currentChar != ".":
+    charIndex = seedLength
+    maxPredictionLen = 300
+    while not re.search('(?<!(.{1}\smr|\smrs|.{2}\sm|\smme|mlle))\\.\s', result) and len(result) < maxPredictionLen:
         #Predict the next character using the RNN
-        prediction = model.predict(np.array([pattern]), verbose=0)[0]
+        #paddedPattern = np.pad(pattern, ((0, 0), (0, maxSeqLength - len(result)), (0, 0)), constant_values=maskValue)
+        prediction = model.predict(pattern, verbose=0)[0]
         index = sample(prediction, temperature)
         currentChar = intToChar[index]
         #One-hot encode the outputted character
         oneHot = np.zeros((nVocab))
         oneHot[index] = 1.0
-        #Update seed using newly generated character
-        pattern[0:seqLength-1] = pattern[1:seqLength]
-        pattern[seqLength - 1] = oneHot
+        #print("Initial pattern: {}".format(pattern))
+        #Update pattern using newly generated character
+        #pattern[0:seqLength-1] = pattern[1:seqLength]
+        if charIndex >= maxSeqLength:
+            pattern[0, 0:maxSeqLength-1] = pattern[0, 1:maxSeqLength]
+            pattern[0, maxSeqLength-1] = oneHot
+            #print(pattern)
+        else:
+            pattern[0, charIndex] = oneHot
+        #print(pattern)
         result += currentChar
+        charIndex += 1
 
     print("Generated text:\n{}".format(result))
